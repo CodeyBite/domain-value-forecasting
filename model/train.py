@@ -6,6 +6,9 @@ from utils.features import domain_embedding
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import f1_score
+
 
 # -----------------------------
 # Load dataset
@@ -84,12 +87,16 @@ X_train, X_test, y_train, y_test = train_test_split(
 # -----------------------------
 # Train model
 # -----------------------------
+# -----------------------------
+# Train model
+# -----------------------------
 model = LogisticRegression(
     max_iter=2000,
-    solver="lbfgs"
+    solver="lbfgs",
+    class_weight="balanced"
 )
 
-model.fit(X_train, y_train)
+model.fit(X_train, y_train)   # ← THIS WAS MISSING
 
 # -----------------------------
 # Evaluate
@@ -99,3 +106,27 @@ y_pred = model.predict(X_test)
 print("\nBaseline Model Accuracy:", accuracy_score(y_test, y_pred))
 print("\nClassification Report:")
 print(classification_report(y_test, y_pred))
+
+# -----------------------------
+# Improved Model: Random Forest
+# -----------------------------
+rf_model = RandomForestClassifier(
+    n_estimators=300,
+    random_state=42,
+    class_weight="balanced"
+)
+
+rf_model.fit(X_train, y_train)
+
+rf_pred = rf_model.predict(X_test)
+
+print("\nImproved Model (Random Forest)")
+print("Accuracy:", accuracy_score(y_test, rf_pred))
+print("F1-score (macro):", f1_score(y_test, rf_pred, average="macro"))
+print(classification_report(y_test, rf_pred))
+
+import joblib
+
+joblib.dump(model, "model/domain_value_model.pkl")
+joblib.dump(tld_encoded.columns.tolist(), "model/tld_columns.pkl")
+joblib.dump((year_min, year_max), "model/year_range.pkl")

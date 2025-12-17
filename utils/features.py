@@ -20,3 +20,10 @@ def domain_embedding(domain: str):
     """
     cleaned = clean_domain(domain)
     return model.encode(cleaned)
+
+def simple_domain_features(domain):
+    return [
+        len(domain),
+        domain.count('-'),
+        domain.count('.'),
+    ]
