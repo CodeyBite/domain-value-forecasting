@@ -1,3 +1,4 @@
+from utils.domain_generator import generate_domains
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -37,7 +38,7 @@ def infer_trend(domain: str) -> str:
 # =============================
 # Feature encoding
 # =============================
-def encode_features(domain, year, tld):
+def encode_features(domain: str, year: int, tld: str) -> np.ndarray:
     embed = domain_embedding(domain)
 
     tld_vec = np.zeros(len(tld_columns))
@@ -52,98 +53,112 @@ def encode_features(domain, year, tld):
     return np.hstack([embed, tld_vec, year_norm])
 
 # =============================
+# Cached domain generation
+# =============================
+@st.cache_data(show_spinner=False)
+def get_candidate_domains(count=200, tld="ai"):
+    return generate_domains(count=count, tld=tld)
+
+# =============================
+# Cached scoring pipeline
+# =============================
+@st.cache_data(show_spinner=True)
+def score_domains(domains, year):
+    rows = []
+
+    for d in domains:
+        X = encode_features(d, year, "ai").reshape(1, -1)
+        probs = rf_model.predict_proba(X)[0]
+
+        pred_class = int(np.argmax(probs))
+        ml_conf = float(np.max(probs))
+
+        keyword = d.split(".")[0]
+        news_text, news_score = fetch_news(keyword)
+
+        # Final score (NO circular logic)
+        final_score = round(
+            0.6 * ml_conf +
+            0.4 * news_score,
+            3
+        )
+
+        # Mature pricing
+        if pred_class == 0:
+            base, span = 5000, 10000
+        elif pred_class == 1:
+            base, span = 20000, 25000
+        else:
+            base, span = 40000, 40000
+
+        est_price = int(base + final_score * span)
+        low = int(est_price * 0.85)
+        high = int(est_price * 1.15)
+
+        rows.append({
+            "Domain": d,
+            "Value Class": ["Low", "Medium", "High"][pred_class],
+            "ML Score": round(ml_conf, 2),
+            "News Score": round(news_score, 2),
+            "Final Score": final_score,
+            "Estimated Price": f"${low:,.0f} – ${high:,.0f}",
+            "Latest News": news_text if news_text else infer_trend(d)
+        })
+
+    return pd.DataFrame(rows)
+
+# =============================
 # UI
 # =============================
 st.title("🚀 Domain Value Forecasting System")
-st.write("Predict high-potential domain names for resale using ML + trend signals")
+st.caption(
+    "AI-assisted system combining historical domain valuation patterns "
+    "with real-time market signals."
+)
 
 domain_input = st.text_input("Enter domain name", "futuretech.ai")
 year_input = st.number_input("Expected sale year", 2025, 2035, 2026)
 tld_input = st.selectbox("Select TLD", sorted(tld_columns))
 
-if st.button("Predict Value"):
-    X = encode_features(domain_input, year_input, tld_input).reshape(1, -1)
-    probs = rf_model.predict_proba(X)[0]
-    pred_class = int(np.argmax(probs))
+# SINGLE BUTTON (IMPORTANT)
+predict_clicked = st.button("Predict Value", key="predict_main")
 
-    st.subheader("Prediction Result")
-    st.write(f"**Domain:** {domain_input}")
-    st.write(f"**Predicted Value:** {['Low','Medium','High'][pred_class]}")
-    st.write(f"**ML Confidence:** {np.max(probs):.2f}")
+if predict_clicked:
+    with st.spinner("Analyzing market signals and ranking domains..."):
 
-# =============================
-# Candidate domains (research pool)
-# =============================
-candidate_domains = [
-    "agentstack.ai",
-    "quantumvault.ai",
-    "greeninfra.ai",
-    "neurofinance.ai",
-    "healthmesh.ai",
-    "roboticscloud.ai",
-    "aifinancehub.ai",
-    "energyai.ai",
-    "datasecurity.ai",
-    "climatechain.ai"
-]
+        # ---- Single domain prediction ----
+        X = encode_features(domain_input, year_input, tld_input).reshape(1, -1)
+        probs = rf_model.predict_proba(X)[0]
+        pred_class = int(np.argmax(probs))
 
-rows = []
+        st.subheader("📊 Prediction Result")
+        st.write(f"**Domain:** {domain_input}")
+        st.write(f"**Predicted Value:** {['Low','Medium','High'][pred_class]}")
+        st.write(f"**ML Confidence:** {np.max(probs):.2f}")
 
-for d in candidate_domains:
-    X = encode_features(d, year_input, "ai").reshape(1, -1)
-    probs = rf_model.predict_proba(X)[0]
+        # ---- Discovery & ranking ----
+        candidate_domains = get_candidate_domains(count=200, tld="ai")
 
-    pred_class = int(np.argmax(probs))
-    ml_conf = float(np.max(probs))
+        if not candidate_domains:
+            st.error("Domain generator returned zero domains.")
+            st.stop()
 
-    keyword = d.split(".")[0]
-    news_text, news_score = fetch_news(keyword)
+        df_all = score_domains(candidate_domains, year_input)
 
-    # Final score (balanced, conservative)
-    final_score = round(
-        0.6 * ml_conf +
-        0.25 * news_score +
-        0.15 * (0.2 if pred_class == 2 else 0.1 if pred_class == 1 else 0.0),
-        3
-    )
+        if df_all.empty:
+            st.error("Scoring pipeline returned empty results.")
+            st.stop()
 
-    # Price estimation (REALISTIC)
-    if pred_class == 0:
-        base = 15000
-        span = 12000
-    elif pred_class == 1:
-        base = 35000
-        span = 25000
-    else:
-        base = 60000
-        span = 40000
+        df_top5 = (
+            df_all
+            .sort_values("Final Score", ascending=False)
+            .head(5)
+            .reset_index(drop=True)
+        )
 
-    est_price = int(base + final_score * span)
-    low = int(est_price * 0.85)
-    high = int(est_price * 1.15)
+        df_top5.insert(0, "Rank", range(1, len(df_top5) + 1))
 
-    rows.append({
-        "Domain": d,
-        "Value": ["Low", "Medium", "High"][pred_class],
-        "ML Score": round(ml_conf, 2),
-        "News Score": round(news_score, 2),
-        "Final Score": final_score,
-        "Estimated Price": f"${low:,.0f} – ${high:,.0f}",
-        "Reason": news_text if news_text else infer_trend(d)
-    })
+    st.success(f"Scanned {len(candidate_domains)} candidate domains")
 
-# =============================
-# Final ranking table
-# =============================
-df = pd.DataFrame(rows)
-
-df = (
-    df.sort_values("Final Score", ascending=False)
-      .head(5)
-      .reset_index(drop=True)
-)
-
-df.insert(0, "Rank", df.index + 1)
-
-st.subheader("🏆 Top 5 High-Potential Domain Opportunities")
-st.dataframe(df, use_container_width=True)
+    st.subheader("🏆 Top 5 High-Potential Domain Opportunities")
+    st.dataframe(df_top5, use_container_width=True)
